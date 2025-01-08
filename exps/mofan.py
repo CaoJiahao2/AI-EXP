@@ -1,8 +1,33 @@
-import sys 
+# -*- coding: utf-8 -*-
+"""
+魔方表面涂色问题求解脚本
+
+任务描述：
+给定一个标准的三阶魔方（3x3x3），对魔方的外表面进行着色，
+选择颜色（红、黄、蓝、绿、白、橙）满足相邻魔方块颜色不同，
+并使总资源消耗最低。每种颜色的资源消耗分别为：
+红：1，黄：2，蓝：3，绿：4，白：5，橙：6。
+
+实验要求：
+1. 定义魔方结构并创建图结构表示相邻关系。
+2. 采用贪心算法进行求解。
+3. 输出最小资源消耗。
+4. 调用Python语言的库，输出每个魔方块的颜色的可视化结果（保存为6个JPG图像）。
+
+作者：曹佳豪
+日期：2025-01-08
+"""
+
+import sys
 import time
 from collections import defaultdict
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+from matplotlib import rcParams
+
+# 设置中文字体，示例使用 SimHei
+rcParams['font.sans-serif'] = ['WenQuanYi']  # 使用黑体
+rcParams['axes.unicode_minus'] = False   # 解决负号显示问题
 
 # 定义颜色及其对应的资源消耗
 COLOR_COSTS = {
@@ -13,8 +38,6 @@ COLOR_COSTS = {
     '白': 5,
     '橙': 6
 }
-
-COLORS = list(COLOR_COSTS.keys())
 
 # 定义颜色在matplotlib中的映射
 COLOR_MAP = {
@@ -29,296 +52,324 @@ COLOR_MAP = {
 # 定义魔方六个外表面的名称
 FACES = ['U', 'D', 'F', 'B', 'L', 'R']  # 上, 下, 前, 后, 左, 右
 
-# 定义唯一的魔方块（26个）
-# 角块：8个，边块：12个，中心块：6个
-UNIQUE_BLOCKS = {
-    # 角块
-    1: {'coords': (0, 1, 0), 'faces': ['U', 'F', 'L']},
-    2: {'coords': (0, 1, 2), 'faces': ['U', 'F', 'R']},
-    3: {'coords': (2, 1, 0), 'faces': ['U', 'B', 'L']},
-    4: {'coords': (2, 1, 2), 'faces': ['U', 'B', 'R']},
-    5: {'coords': (0, -1, 0), 'faces': ['D', 'F', 'L']},
-    6: {'coords': (0, -1, 2), 'faces': ['D', 'F', 'R']},
-    7: {'coords': (2, -1, 0), 'faces': ['D', 'B', 'L']},
-    8: {'coords': (2, -1, 2), 'faces': ['D', 'B', 'R']},
-    # 边块
-    9: {'coords': (1, 1, 0), 'faces': ['U', 'L']},
-    10: {'coords': (1, 1, 2), 'faces': ['U', 'R']},
-    11: {'coords': (0, 1, 1), 'faces': ['U', 'F']},
-    12: {'coords': (2, 1, 1), 'faces': ['U', 'B']},
-    13: {'coords': (1, -1, 0), 'faces': ['D', 'L']},
-    14: {'coords': (1, -1, 2), 'faces': ['D', 'R']},
-    15: {'coords': (0, -1, 1), 'faces': ['D', 'F']},
-    16: {'coords': (2, -1, 1), 'faces': ['D', 'B']},
-    17: {'coords': (0, 0, 1), 'faces': ['F', 'L']},
-    18: {'coords': (0, 0, -1), 'faces': ['F', 'R']},
-    19: {'coords': (2, 0, 1), 'faces': ['B', 'L']},
-    20: {'coords': (2, 0, -1), 'faces': ['B', 'R']},
-    # 中心块
-    21: {'coords': (1, 1, 1), 'faces': ['U']},  # U中心
-    22: {'coords': (1, -1, 1), 'faces': ['D']}, # D中心
-    23: {'coords': (1, 0, 2), 'faces': ['F']},  # F中心
-    24: {'coords': (1, 0, 0), 'faces': ['B']},  # B中心
-    25: {'coords': (0, 0, 0), 'faces': ['L']},  # L中心
-    26: {'coords': (2, 0, 0), 'faces': ['R']}   # R中心
-}
+# 为每个魔方块分配一个唯一的ID（0-53）
+# 使用(face, row, col)来表示每个魔方块的位置
+# face: 'U', 'D', 'F', 'B', 'L', 'R'
+# row, col: 0,1,2 从上到下、从左到右
+STICKERS = {}
+sticker_id = 0
+for face in FACES:
+    for row in range(3):
+        for col in range(3):
+            STICKERS[sticker_id] = {
+                'face': face,
+                'row': row,
+                'col': col
+            }
+            sticker_id += 1
 
-# 为每个魔方块分配一个唯一的ID
-BLOCKS = UNIQUE_BLOCKS.copy()
-
-# 构建坐标到块ID的映射
-COORD_TO_BLOCK = {}
-for block_id, block in BLOCKS.items():
-    COORD_TO_BLOCK[tuple(block['coords'])] = block_id
-
-# 定义邻接关系
+# 定义相邻关系
+# 使用邻接表表示，每个魔方块对应一个集合，存储其相邻的魔方块ID
 ADJACENCY = defaultdict(set)
 
-# 定义每个魔方块的邻接关系
-for block_id, block in BLOCKS.items():
-    x, y, z = block['coords']
-    neighbors_coords = [
-        (x-1, y, z), (x+1, y, z),  # 左右
-        (x, y-1, z), (x, y+1, z),  # 前后
-        (x, y, z-1), (x, y, z+1)   # 上下
-    ]
-    for coord in neighbors_coords:
-        neighbor_id = COORD_TO_BLOCK.get(coord)
-        if neighbor_id:
-            ADJACENCY[block_id].add(neighbor_id)
+# 定义每个面与其他面的相邻关系及对应边
+# 每个元组为 (相邻面, 相邻面对应的边, 是否需要翻转)
+# 边的定义：'top', 'bottom', 'left', 'right'
+ADJACENT_FACES = {
+    'U': [('B', 'top', True),
+          ('R', 'top', False),
+          ('F', 'top', False),
+          ('L', 'top', True)],
+    'D': [('F', 'bottom', False),
+          ('R', 'bottom', False),
+          ('B', 'bottom', True),
+          ('L', 'bottom', False)],
+    'F': [('U', 'bottom', False),
+          ('R', 'left', True),
+          ('D', 'top', False),
+          ('L', 'right', False)],
+    'B': [('U', 'top', True),
+          ('L', 'left', True),
+          ('D', 'bottom', True),
+          ('R', 'right', False)],
+    'L': [('U', 'left', True),
+          ('F', 'left', False),
+          ('D', 'left', False),
+          ('B', 'right', True)],
+    'R': [('U', 'right', False),
+          ('B', 'left', True),
+          ('D', 'right', False),
+          ('F', 'right', True)]
+}
 
-# 确保邻接关系无重复
-for block in ADJACENCY:
-    ADJACENCY[block] = list(ADJACENCY[block])
-
-# 着色算法实现与之前相同，基于重新定义的块和邻接关系
-class RubiksCubeColoringBacktracking:
-    def __init__(self, blocks, adjacency, color_costs, colors):
-        self.blocks = blocks
-        self.adjacency = adjacency
-        self.color_costs = color_costs
-        self.colors = colors
-        self.assignment = {}
-        self.min_cost = sys.maxsize
-        self.best_assignment = {}
-
-    # 检查当前颜色是否可以安全赋值
-    def is_safe(self, block, color):
-        for neighbor in self.adjacency[block]:
-            if neighbor in self.assignment and self.assignment[neighbor] == color:
-                return False
-        return True
-
-    # 回溯算法核心
-    def backtrack(self, block_order, index, current_cost):
-        # 所有魔方块都已赋值
-        if index == len(block_order):
-            if current_cost < self.min_cost:
-                self.min_cost = current_cost
-                self.best_assignment = self.assignment.copy()
-            return
-
-        block = block_order[index]
-
-        # 按照资源消耗从低到高的顺序尝试颜色
-        sorted_colors = sorted(self.colors, key=lambda c: self.color_costs[c])
-        for color in sorted_colors:
-            if self.is_safe(block, color):
-                self.assignment[block] = color
-                new_cost = current_cost + self.color_costs[color]
-
-                # 剪枝：如果当前成本已经超过已知最小成本，停止探索
-                if new_cost < self.min_cost:
-                    self.backtrack(block_order, index + 1, new_cost)
-
-                # 回溯
-                del self.assignment[block]
-
-    # 解决问题
-    def solve(self):
-        # 按照邻接数从多到少排序，提高回溯效率
-        block_order = sorted(self.blocks.keys(), key=lambda b: len(self.adjacency[b]), reverse=True)
-        self.backtrack(block_order, 0, 0)
-
-    # 打印解决方案
-    def print_solution(self):
-        if not self.best_assignment:
-            print("没有找到可行的颜色分配方案。")
-            return
-        print("=== 回溯法解决方案 ===")
-        print(f"最小总资源消耗: {self.min_cost}")
-        print("魔方块颜色分配:")
-        for block in sorted(self.best_assignment.keys()):
-            faces = self.blocks[block]['faces']
-            color = self.best_assignment[block]
-            print(f"魔方块 {block} (Faces: {','.join(faces)}): {color}")
-        print()
-
-    # 获取最佳分配方案
-    def get_best_assignment(self):
-        return self.best_assignment, self.min_cost
-
-class RubiksCubeColoringGreedy:
-    def __init__(self, blocks, adjacency, color_costs, colors):
-        self.blocks = blocks
-        self.adjacency = adjacency
-        self.color_costs = color_costs
-        self.colors = colors
-        self.assignment = {}
-        self.total_cost = 0
-
-    # 获取可用颜色（不与相邻魔方块相同）
-    def get_available_colors(self, block):
-        used_colors = set()
-        for neighbor in self.adjacency[block]:
-            if neighbor in self.assignment:
-                used_colors.add(self.assignment[neighbor])
-        available = [color for color in self.colors if color not in used_colors]
-        return available
-
-    # 解决问题
-    def solve(self):
-        # 按照魔方块的度数从高到低排序
-        block_order = sorted(self.blocks.keys(), key=lambda b: len(self.adjacency[b]), reverse=True)
-        for block in block_order:
-            available_colors = self.get_available_colors(block)
-            if not available_colors:
-                # 无可用颜色，无法完成涂色
-                print(f"魔方块 {block} (Faces: {','.join(self.blocks[block]['faces'])}) 无可用颜色，无法完成涂色。")
-                return
-            # 选择资源消耗最低的可用颜色
-            selected_color = min(available_colors, key=lambda c: self.color_costs[c])
-            self.assignment[block] = selected_color
-            self.total_cost += self.color_costs[selected_color]
-
-    # 打印解决方案
-    def print_solution(self):
-        if not self.assignment:
-            print("没有找到可行的颜色分配方案。")
-            return
-        print("=== 贪心算法解决方案 ===")
-        print(f"总资源消耗: {self.total_cost}")
-        print("魔方块颜色分配:")
-        for block in sorted(self.assignment.keys()):
-            faces = self.blocks[block]['faces']
-            color = self.assignment[block]
-            print(f"魔方块 {block} (Faces: {','.join(faces)}): {color}")
-        print()
-
-    # 获取分配方案
-    def get_assignment(self):
-        return self.assignment, self.total_cost
-
-# 图形化展示函数
-def visualize_cube(assignments, title):
+# 边对应的行列映射
+def get_edge_indices(face, edge):
     """
-    使用matplotlib绘制魔方的展开图，显示颜色分配结果。
-    assignments: 字典，键为块ID，值为颜色名。
-    title: 图表标题。
+    获取指定面某一边的所有魔方块的ID列表。
+    edge: 'top', 'bottom', 'left', 'right'
     """
-    # 魔方展开图的布局
-    # 上 (U) 面位于中间上方
-    # 下 (D) 面位于中间下方
-    # 前 (F) 面位于中间
-    # 后 (B) 面位于前面的右侧
-    # 左 (L) 面位于前面的左侧
-    # 右 (R) 面位于前面的右侧
+    indices = []
+    for col in range(3):
+        for row in range(3):
+            if face == 'U' or face == 'D':
+                if edge == 'top' and row == 0:
+                    indices.append(face_id(face) * 9 + row * 3 + col)
+                elif edge == 'bottom' and row == 2:
+                    indices.append(face_id(face) * 9 + row * 3 + col)
+            elif face == 'F' or face == 'B':
+                if edge == 'top' and row == 0:
+                    indices.append(face_id(face) * 9 + row * 3 + col)
+                elif edge == 'bottom' and row == 2:
+                    indices.append(face_id(face) * 9 + row * 3 + col)
+                elif edge == 'left' and col == 0:
+                    indices.append(face_id(face) * 9 + row * 3 + col)
+                elif edge == 'right' and col == 2:
+                    indices.append(face_id(face) * 9 + row * 3 + col)
+            elif face == 'L' or face == 'R':
+                if edge == 'top' and row == 0:
+                    indices.append(face_id(face) * 9 + row * 3 + col)
+                elif edge == 'bottom' and row == 2:
+                    indices.append(face_id(face) * 9 + row * 3 + col)
+                elif edge == 'left' and col == 0:
+                    indices.append(face_id(face) * 9 + row * 3 + col)
+                elif edge == 'right' and col == 2:
+                    indices.append(face_id(face) * 9 + row * 3 + col)
+    return indices
 
-    face_positions_2d = {
-        'U': (3, 6),
-        'L': (0, 3),
-        'F': (3, 3),
-        'R': (6, 3),
-        'B': (9, 3),
-        'D': (3, 0)
+def face_id(face):
+    """
+    返回面名称对应的索引。
+    FACES = ['U', 'D', 'F', 'B', 'L', 'R']
+    'U' -> 0, 'D' ->1, 'F'->2, 'B'->3, 'L'->4, 'R'->5
+    """
+    return FACES.index(face)
+
+# 手动定义边的魔方块ID
+# 为简化，手动列出每个面的边对应的魔方块ID
+# 例如，U面的top边对应B面的top边，需要考虑翻转
+
+# 定义每个面的边对应的魔方块ID
+def get_face_edge(face, edge):
+    """
+    获取指定面某一边的魔方块ID列表。
+    edge: 'top', 'bottom', 'left', 'right'
+    返回列表按照从左到右的顺序
+    """
+    face_idx = face_id(face)
+    stickers = []
+    if edge == 'top':
+        row = 0
+        for col in range(3):
+            stickers.append(face_idx * 9 + row * 3 + col)
+    elif edge == 'bottom':
+        row = 2
+        for col in range(3):
+            stickers.append(face_idx * 9 + row * 3 + col)
+    elif edge == 'left':
+        col = 0
+        for row in range(3):
+            stickers.append(face_idx * 9 + row * 3 + col)
+    elif edge == 'right':
+        col = 2
+        for row in range(3):
+            stickers.append(face_idx * 9 + row * 3 + col)
+    return stickers
+
+def adjacent_edge(face, adj_face):
+    """
+    根据当前面和相邻面，返回当前面对应的边。
+    """
+    mapping = {
+        ('U', 'B'): 'top',
+        ('U', 'R'): 'right',
+        ('U', 'F'): 'bottom',
+        ('U', 'L'): 'left',
+        ('D', 'F'): 'bottom',
+        ('D', 'R'): 'right',
+        ('D', 'B'): 'bottom',
+        ('D', 'L'): 'left',
+        ('F', 'U'): 'top',
+        ('F', 'R'): 'left',
+        ('F', 'D'): 'bottom',
+        ('F', 'L'): 'right',
+        ('B', 'U'): 'top',
+        ('B', 'L'): 'left',
+        ('B', 'D'): 'bottom',
+        ('B', 'R'): 'right',
+        ('L', 'U'): 'left',
+        ('L', 'F'): 'left',
+        ('L', 'D'): 'left',
+        ('L', 'B'): 'right',
+        ('R', 'U'): 'right',
+        ('R', 'B'): 'left',
+        ('R', 'D'): 'right',
+        ('R', 'F'): 'right'
     }
+    return mapping.get((face, adj_face), None)
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+def corresponding_edge(face, adj_face):
+    """
+    根据当前面和相邻面，返回相邻面对应的边。
+    """
+    mapping = {
+        ('U', 'B'): 'top',
+        ('U', 'R'): 'top',
+        ('U', 'F'): 'top',
+        ('U', 'L'): 'top',
+        ('D', 'F'): 'bottom',
+        ('D', 'R'): 'bottom',
+        ('D', 'B'): 'bottom',
+        ('D', 'L'): 'bottom',
+        ('F', 'U'): 'bottom',
+        ('F', 'R'): 'left',
+        ('F', 'D'): 'top',
+        ('F', 'L'): 'right',
+        ('B', 'U'): 'top',
+        ('B', 'L'): 'left',
+        ('B', 'D'): 'bottom',
+        ('B', 'R'): 'right',
+        ('L', 'U'): 'left',
+        ('L', 'F'): 'left',
+        ('L', 'D'): 'left',
+        ('L', 'B'): 'right',
+        ('R', 'U'): 'right',
+        ('R', 'B'): 'left',
+        ('R', 'D'): 'right',
+        ('R', 'F'): 'right'
+    }
+    return mapping.get((face, adj_face), None)
 
-    for face, (start_x, start_y) in face_positions_2d.items():
-        # 获取属于该面的块
-        face_blocks = [block_id for block_id, block in BLOCKS.items() if face in block['faces']]
-        # 对于每个面，按照位置编号（假设左上到右下顺序）
-        # 需要手动排序或定义块的位置
-        # 这里假设块按三维坐标的某种顺序排列
-        # 具体位置需要根据物理坐标映射
+# 构建相邻关系
+for face in FACES:
+    face_idx = face_id(face)
+    # 首先，定义同一面的内部相邻关系（上下左右）
+    for row in range(3):
+        for col in range(3):
+            current_id = face_idx * 9 + row * 3 + col
+            # 上
+            if row > 0:
+                neighbor_id = face_idx * 9 + (row - 1) * 3 + col
+                ADJACENCY[current_id].add(neighbor_id)
+            # 下
+            if row < 2:
+                neighbor_id = face_idx * 9 + (row + 1) * 3 + col
+                ADJACENCY[current_id].add(neighbor_id)
+            # 左
+            if col > 0:
+                neighbor_id = face_idx * 9 + row * 3 + (col - 1)
+                ADJACENCY[current_id].add(neighbor_id)
+            # 右
+            if col < 2:
+                neighbor_id = face_idx * 9 + row * 3 + (col + 1)
+                ADJACENCY[current_id].add(neighbor_id)
+    # 然后，定义跨面相邻关系
+    for adjacent in ADJACENT_FACES[face]:
+        adj_face, adj_edge, is_reversed = adjacent
+        current_edges = get_face_edge(face, adjacent_edge(face, adj_face))
+        adj_face_edges = get_face_edge(adj_face, corresponding_edge(face, adj_face))
+        if is_reversed:
+            adj_face_edges = adj_face_edges[::-1]
+        for i in range(3):
+            ADJACENCY[current_edges[i]].add(adj_face_edges[i])
+            ADJACENCY[adj_face_edges[i]].add(current_edges[i])
 
-        # 例如，对于U面，块的坐标有固定的y和z值
-        # 排序方式：x从0到2， z从0到2
+# 修正相邻关系，确保每对相邻魔方块互相包含对方
+for sticker, neighbors in ADJACENCY.items():
+    for neighbor in neighbors:
+        ADJACENCY[neighbor].add(sticker)
 
-        # 获取U面块
-        if face == 'U':
-            sorted_face_blocks = sorted(face_blocks, key=lambda b: (BLOCKS[b]['coords'][0], BLOCKS[b]['coords'][2]))
-        elif face == 'D':
-            sorted_face_blocks = sorted(face_blocks, key=lambda b: (BLOCKS[b]['coords'][0], BLOCKS[b]['coords'][2]))
-        elif face == 'F':
-            sorted_face_blocks = sorted(face_blocks, key=lambda b: (BLOCKS[b]['coords'][1], BLOCKS[b]['coords'][0]))
-        elif face == 'B':
-            sorted_face_blocks = sorted(face_blocks, key=lambda b: (BLOCKS[b]['coords'][1], -BLOCKS[b]['coords'][0]))
-        elif face == 'L':
-            sorted_face_blocks = sorted(face_blocks, key=lambda b: (BLOCKS[b]['coords'][2], BLOCKS[b]['coords'][1]))
-        elif face == 'R':
-            sorted_face_blocks = sorted(face_blocks, key=lambda b: (-BLOCKS[b]['coords'][2], BLOCKS[b]['coords'][1]))
+# 贪心算法实现
+def greedy_coloring(adjacency, color_costs, colors):
+    """
+    使用贪心算法为魔方表面着色。
+    adjacency: 邻接表，字典类型，键为魔方块ID，值为相邻的魔方块ID集合
+    color_costs: 颜色及其对应的资源消耗字典
+    colors: 可用颜色列表
+    返回: (颜色分配字典, 总资源消耗)
+    """
+    # 按照魔方块的度数从高到低排序
+    degree_sorted = sorted(adjacency.keys(), key=lambda x: len(adjacency[x]), reverse=True)
+    assignment = {}
+    total_cost = 0
 
-        # 假设每个面有3x3的块
-        for idx, block_id in enumerate(sorted_face_blocks):
-            row = idx // 3
-            col = idx % 3
-            x = start_x + col
-            y = start_y + (2 - row)  # 翻转y轴，使得位置1在左上角
-            color_name = assignments.get(block_id, '灰色')  # 默认灰色表示未分配
-            color = COLOR_MAP.get(color_name, 'gray')
-            rect = Rectangle((x, y), 1, 1, linewidth=1, edgecolor='black', facecolor=color)
-            ax.add_patch(rect)
-            # 添加文本标签
-            ax.text(x + 0.5, y + 0.5, f"{face}", 
-                    horizontalalignment='center', verticalalignment='center', fontsize=8)
+    for sticker in degree_sorted:
+        used_colors = set()
+        for neighbor in adjacency[sticker]:
+            if neighbor in assignment:
+                used_colors.add(assignment[neighbor])
+        # 从可用颜色中选择资源消耗最低的颜色
+        available_colors = [color for color in colors if color not in used_colors]
+        if not available_colors:
+            # 如果没有可用颜色，无法完成涂色
+            print(f"魔方块 {sticker} 无可用颜色，无法完成涂色。")
+            sys.exit(1)
+        # 选择资源消耗最低的颜色
+        selected_color = min(available_colors, key=lambda c: color_costs[c])
+        assignment[sticker] = selected_color
+        total_cost += color_costs[selected_color]
 
-    # 设置图形属性
-    ax.set_xlim(0, 12)
-    ax.set_ylim(0, 9)
-    ax.set_aspect('equal')
-    ax.axis('off')
-    ax.set_title(title, fontsize=16)
-    plt.show()
+    return assignment, total_cost
+
+# 可视化函数
+def visualize_faces(assignments, face_names, color_map, save=True):
+    """
+    可视化每个面的颜色分配结果，并保存为JPG图像。
+    assignments: 颜色分配字典，键为魔方块ID，值为颜色名
+    face_names: 面的名称列表
+    color_map: 颜色名到matplotlib颜色的映射字典
+    save: 是否保存为图片
+    """
+    for face in face_names:
+        fig, ax = plt.subplots(figsize=(3,3))
+        face_idx = face_id(face)
+        # 创建一个3x3的网格
+        for row in range(3):
+            for col in range(3):
+                sticker = face_idx * 9 + row * 3 + col
+                color = color_map.get(assignments.get(sticker, '灰'), 'gray')
+                rect = Rectangle((col, 2 - row), 1, 1, linewidth=1, edgecolor='black', facecolor=color)
+                ax.add_patch(rect)
+                # 添加魔方块ID文本
+                ax.text(col + 0.5, 2 - row + 0.5, f"{sticker}", 
+                        horizontalalignment='center', verticalalignment='center', fontsize=8)
+        # 设置图形属性
+        ax.set_xlim(0,3)
+        ax.set_ylim(0,3)
+        ax.set_aspect('equal')
+        ax.axis('off')
+        ax.set_title(f"{face} face color", fontsize=14)
+        if save:
+            plt.savefig(f"/home/jiahaocao/AI-EXP/exps/vis_mofan/{face}.jpg")
+        plt.show()
 
 # 主程序
 def main():
-    # 初始化回溯法解决方案
-    cube_coloring_bt = RubiksCubeColoringBacktracking(BLOCKS, ADJACENCY, COLOR_COSTS, COLORS)
+    start_time = time.time()
+    # 使用贪心算法进行着色
+    assignment, total_cost = greedy_coloring(ADJACENCY, COLOR_COSTS, list(COLOR_COSTS.keys()))
+    end_time = time.time()
 
-    # 初始化贪心算法解决方案
-    cube_coloring_greedy = RubiksCubeColoringGreedy(BLOCKS, ADJACENCY, COLOR_COSTS, COLORS)
+    # 输出最小资源消耗
+    print(f"最小总资源消耗: {total_cost}")
 
-    # 记录贪心算法的开始时间
-    start_time_greedy = time.time()
-    cube_coloring_greedy.solve()
-    end_time_greedy = time.time()
+    # 输出每个魔方块的颜色分配
+    for face in FACES:
+        print(f"=== {face} 面 ===")
+        face_idx = face_id(face)
+        for row in range(3):
+            row_colors = []
+            for col in range(3):
+                sticker = face_idx * 9 + row * 3 + col
+                color = assignment.get(sticker, '无')
+                row_colors.append(color)
+            print(' '.join(row_colors))
+        print()
 
-    # 打印贪心算法的解决方案
-    cube_coloring_greedy.print_solution()
-    print(f"贪心算法求解时间: {end_time_greedy - start_time_greedy:.4f} 秒\n")
+    # 可视化每个面并保存为JPG图像
+    visualize_faces(assignment, FACES, COLOR_MAP, save=True)
 
-    # 获取贪心算法的分配方案
-    greedy_assignment, greedy_cost = cube_coloring_greedy.get_assignment()
-
-    # 记录回溯法的开始时间
-    start_time_bt = time.time()
-    cube_coloring_bt.solve()
-    end_time_bt = time.time()
-
-    # 打印回溯法的解决方案
-    cube_coloring_bt.print_solution()
-    print(f"回溯法求解时间: {end_time_bt - start_time_bt:.4f} 秒\n")
-
-    # 获取回溯法的分配方案
-    bt_assignment, bt_cost = cube_coloring_bt.get_best_assignment()
-
-    # 图形化展示回溯法结果
-    visualize_cube(bt_assignment, "回溯法颜色分配结果")
-
-    # 图形化展示贪心算法结果
-    visualize_cube(greedy_assignment, "贪心算法颜色分配结果")
+    # 输出程序运行时间
+    print(f"程序运行时间: {end_time - start_time:.4f} 秒")
 
 if __name__ == "__main__":
     main()
