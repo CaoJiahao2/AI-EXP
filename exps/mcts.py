@@ -5,7 +5,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import random
-from collections import defaultdict
 import math
 import time
 
@@ -45,25 +44,27 @@ class MCTSNode:
     """
     MCTS节点类，表示机器人在某一位置的状态。
     """
-    def __init__(self, position, parent=None):
+    def __init__(self, position, parent=None, map_grid=None):
         self.position = position          # 当前节点的位置 (x, y)
         self.parent = parent              # 父节点
         self.children = []                # 子节点列表
         self.visits = 0                   # 被访问次数
         self.reward = 0.0                 # 累计奖励
-        self.untried_actions = []         # 未尝试的动作列表
+        # 在节点初始化时设置未尝试的动作
+        self.untried_actions = get_neighbors(position, map_grid) if map_grid is not None else []
 
-    def is_fully_expanded(self, map_grid):
+    def is_fully_expanded(self):
         """
         判断当前节点是否已经完全扩展（所有可能动作都已尝试）。
         """
-        if not self.untried_actions:
-            self.untried_actions = get_neighbors(self.position, map_grid)
         return len(self.untried_actions) == 0
 
     def best_child(self, c_param=1.4):
         """
         使用UCB1公式选择最佳子节点。
+
+        :param c_param: 探索参数，默认值为1.4
+        :return: 最佳子节点
         """
         choices_weights = [
             (child.reward / child.visits) +
@@ -72,11 +73,15 @@ class MCTSNode:
         ]
         return self.children[np.argmax(choices_weights)]
 
-    def add_child(self, child_position):
+    def add_child(self, child_position, map_grid):
         """
         添加子节点。
+
+        :param child_position: 子节点的位置 (x, y)
+        :param map_grid: 地图二维数组
+        :return: 新添加的子节点
         """
-        child = MCTSNode(child_position, parent=self)
+        child = MCTSNode(child_position, parent=self, map_grid=map_grid)
         self.children.append(child)
         self.untried_actions.remove(child_position)
         return child
@@ -101,7 +106,7 @@ def get_neighbors(position, map_grid):
 
 def simulate_policy(position, goal, map_grid, max_steps=100):
     """
-    从当前位置开始进行模拟，采用贪心策略朝向目标移动，直到达到目标或达到最大步数。
+    从当前位置开始进行模拟，采用贪心策略结合随机选择，直到达到目标或达到最大步数。
 
     :param position: 当前坐标 (x, y)
     :param goal: 目标坐标 (x, y)
@@ -115,9 +120,14 @@ def simulate_policy(position, goal, map_grid, max_steps=100):
         neighbors = get_neighbors(current, map_grid)
         if not neighbors:
             break  # 死路
-        # 采用贪心策略选择离目标最近的邻居
-        neighbors.sort(key=lambda pos: euclidean_distance(pos, goal))
-        current = neighbors[0]
+        # 采用贪心策略选择离目标最近的邻居，但保留一定的随机性
+        if random.random() < 0.9:
+            # 90%的概率选择最接近目标的邻居
+            neighbors.sort(key=lambda pos: euclidean_distance(pos, goal))
+            current = neighbors[0]
+        else:
+            # 10%的概率随机选择一个邻居
+            current = random.choice(neighbors)
         steps += 1
     if current == goal:
         return 1.0  # 成功到达
@@ -134,7 +144,7 @@ def euclidean_distance(a, b):
     """
     return math.sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
 
-def mcts_search(map_grid, start, goal, iterations=1000):
+def mcts_search(map_grid, start, goal, iterations=10000):
     """
     使用MCTS搜索最优路径。
 
@@ -144,20 +154,21 @@ def mcts_search(map_grid, start, goal, iterations=1000):
     :param iterations: MCTS迭代次数
     :return: MCTS根节点
     """
-    root = MCTSNode(start)
-    root.untried_actions = get_neighbors(start, map_grid)
+    root = MCTSNode(start, map_grid=map_grid)
     
     for _ in range(iterations):
         node = root
         # 选择阶段
-        while node.is_fully_expanded(map_grid) and node.children:
+        while node.is_fully_expanded() and node.children:
             node = node.best_child()
         
         # 扩展阶段
-        if not node.is_fully_expanded(map_grid):
-            action = random.choice(node.untried_actions)
-            node = node.add_child(action)
-            node.untried_actions = get_neighbors(node.position, map_grid)
+        if not node.is_fully_expanded():
+            if node.untried_actions:
+                action = random.choice(node.untried_actions)
+                node = node.add_child(action, map_grid)
+            else:
+                continue  # 无未尝试的动作，跳过
         
         # 模拟阶段
         reward = simulate_policy(node.position, goal, map_grid)
@@ -183,8 +194,8 @@ def extract_path(root, goal):
     while node.position != goal:
         if not node.children:
             break  # 无法继续
-        # 选择访问次数最多的子节点
-        node = max(node.children, key=lambda n: n.visits)
+        # 选择奖励最高的子节点
+        node = max(node.children, key=lambda n: (n.reward / n.visits) if n.visits > 0 else 0)
         path.append(node.position)
     return path if node.position == goal else None
 
@@ -199,7 +210,7 @@ def visualize(map_grid, start, goal, path=None, search_nodes=None, filename='mct
     :param search_nodes: 被搜索的节点
     :param filename: 保存的文件名
     """
-    plt.figure(figsize=(8,8))
+    plt.figure(figsize=(10,10))
     plt.imshow(map_grid, cmap='Greys', origin='upper')
     
     # 标记起点和终点
@@ -209,7 +220,7 @@ def visualize(map_grid, start, goal, path=None, search_nodes=None, filename='mct
     # 绘制搜索过的节点
     if search_nodes:
         xs, ys = zip(*search_nodes)
-        plt.scatter(xs, ys, marker='.', color='blue', alpha=0.1, label='搜索节点')
+        plt.scatter(xs, ys, marker='.', color='blue', alpha=0.05, label='搜索节点')
     
     # 绘制路径
     if path:
@@ -261,9 +272,9 @@ def collect_search_nodes(node, nodes_set):
 
 def main():
     # 地图参数
-    width = 50               # 地图宽度
-    height = 50              # 地图高度
-    obstacle_density = 0.2   # 障碍物密度（20%）
+    width = 10               # 地图宽度
+    height = 10              # 地图高度
+    obstacle_density = 0.1   # 障碍物密度（10%）
 
     # 起点和终点
     start = (0, 0)
@@ -290,7 +301,7 @@ def main():
     print(f"地图生成成功，尝试次数：{attempts + 1}")
 
     # MCTS搜索
-    iterations = 5000  # MCTS迭代次数，根据需要调整
+    iterations = 50000  # MCTS迭代次数，根据需要调整
     start_time = time.time()
     root = mcts_search(map_grid, start, goal, iterations=iterations)
     end_time = time.time()
