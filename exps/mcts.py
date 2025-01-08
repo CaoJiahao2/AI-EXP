@@ -1,239 +1,60 @@
-# 基于蒙特卡洛树搜索的机器人路径规划
-# 完整的Python实现，包括地图生成、MCTS算法、路径提取和可视化
-# 可视化结果将保存为jpg文件
-
-import numpy as np
-import matplotlib.pyplot as plt
-import random
 import math
+import random
+import matplotlib.pyplot as plt
+import networkx as nx
 import time
+from collections import deque
 
-# 设置随机种子以保证结果可重复
-random.seed(42)
-np.random.seed(42)
+# 定义动作（上，下，左，右）
+ACTIONS = [(1, 0), (-1, 0), (0, -1), (0, 1)]
 
-def generate_map(width, height, obstacle_density, start, goal):
+def manhattan_distance(state1, state2):
+    """计算曼哈顿距离"""
+    return abs(state1[0] - state2[0]) + abs(state1[1] - state2[1])
+
+def generate_grid(rows, cols, obstacle_density):
     """
-    生成带有随机障碍物的二维地图。
-
-    :param width: 地图宽度
-    :param height: 地图高度
+    生成带有随机障碍物的二维网格地图
+    :param rows: 网格行数
+    :param cols: 网格列数
     :param obstacle_density: 障碍物密度（0到1之间）
-    :param start: 起点坐标 (x, y)
-    :param goal: 终点坐标 (x, y)
-    :return: 二维numpy数组表示的地图
+    :return: 二维网格地图
     """
-    map_grid = np.zeros((height, width), dtype=int)
-    
-    # 计算障碍物数量
-    num_obstacles = int(obstacle_density * width * height)
-    obstacles = set()
-    
-    # 随机放置障碍物，确保起点和终点不被覆盖
-    while len(obstacles) < num_obstacles:
-        x = random.randint(0, width - 1)
-        y = random.randint(0, height - 1)
-        if (x, y) != start and (x, y) != goal:
-            obstacles.add((x, y))
-    for (x, y) in obstacles:
-        map_grid[y][x] = 1  # 1表示障碍物，0表示空地
-    
-    return map_grid
+    grid = [[0 for _ in range(cols)] for _ in range(rows)]
+    for i in range(rows):
+        for j in range(cols):
+            if random.random() < obstacle_density:
+                grid[i][j] = 1  # 1 表示障碍物
+    return grid
 
-class MCTSNode:
-    """
-    MCTS节点类，表示机器人在某一位置的状态。
-    """
-    def __init__(self, position, parent=None, map_grid=None):
-        self.position = position          # 当前节点的位置 (x, y)
-        self.parent = parent              # 父节点
-        self.children = []                # 子节点列表
-        self.visits = 0                   # 被访问次数
-        self.reward = 0.0                 # 累计奖励
-        # 在节点初始化时设置未尝试的动作
-        self.untried_actions = get_neighbors(position, map_grid) if map_grid is not None else []
+def get_valid_actions(state, grid):
+    """获取当前状态下的所有有效动作"""
+    valid_actions = []
+    for action in ACTIONS:
+        new_state = (state[0] + action[0], state[1] + action[1])
+        if (0 <= new_state[0] < len(grid)) and (0 <= new_state[1] < len(grid[0])) and (grid[new_state[0]][new_state[1]] == 0):
+            valid_actions.append(action)
+    return valid_actions
 
-    def is_fully_expanded(self):
-        """
-        判断当前节点是否已经完全扩展（所有可能动作都已尝试）。
-        """
-        return len(self.untried_actions) == 0
+def move(state, action, grid):
+    """根据动作移动，确保不越界且不进入障碍物"""
+    new_state = (state[0] + action[0], state[1] + action[1])
+    if (0 <= new_state[0] < len(grid)) and (0 <= new_state[1] < len(grid[0])) and (grid[new_state[0]][new_state[1]] == 0):
+        return new_state
+    return state  # 如果移动无效，保持原地
 
-    def best_child(self, c_param=1.4):
-        """
-        使用UCB1公式选择最佳子节点。
+def is_goal(state, goal):
+    """判断是否到达目标"""
+    return state == goal
 
-        :param c_param: 探索参数，默认值为1.4
-        :return: 最佳子节点
-        """
-        choices_weights = [
-            (child.reward / child.visits) +
-            c_param * math.sqrt((2 * math.log(self.visits)) / child.visits)
-            for child in self.children
-        ]
-        return self.children[np.argmax(choices_weights)]
-
-    def add_child(self, child_position, map_grid):
-        """
-        添加子节点。
-
-        :param child_position: 子节点的位置 (x, y)
-        :param map_grid: 地图二维数组
-        :return: 新添加的子节点
-        """
-        child = MCTSNode(child_position, parent=self, map_grid=map_grid)
-        self.children.append(child)
-        self.untried_actions.remove(child_position)
-        return child
-
-def get_neighbors(position, map_grid):
-    """
-    获取当前位置的所有合法邻居（上下左右四个方向）。
-
-    :param position: 当前坐标 (x, y)
-    :param map_grid: 地图二维数组
-    :return: 邻居坐标列表
-    """
+def get_neighbors(state, grid):
+    """获取当前状态的邻居节点（上下左右）"""
     neighbors = []
-    x, y = position
-    directions = [(-1,0), (1,0), (0,-1), (0,1)]  # 左, 右, 上, 下
-    for dx, dy in directions:
-        nx, ny = x + dx, y + dy
-        if 0 <= nx < map_grid.shape[1] and 0 <= ny < map_grid.shape[0]:
-            if map_grid[ny][nx] == 0:
-                neighbors.append((nx, ny))
+    for action in ACTIONS:
+        neighbor = move(state, action, grid)
+        if neighbor != state:
+            neighbors.append(neighbor)
     return neighbors
-
-def simulate_policy(position, goal, map_grid, max_steps=100):
-    """
-    从当前位置开始进行模拟，采用贪心策略结合随机选择，直到达到目标或达到最大步数。
-
-    :param position: 当前坐标 (x, y)
-    :param goal: 目标坐标 (x, y)
-    :param map_grid: 地图二维数组
-    :param max_steps: 模拟的最大步数
-    :return: 奖励值（到达目标为1，否则为0）
-    """
-    current = position
-    steps = 0
-    while current != goal and steps < max_steps:
-        neighbors = get_neighbors(current, map_grid)
-        if not neighbors:
-            break  # 死路
-        # 采用贪心策略选择离目标最近的邻居，但保留一定的随机性
-        if random.random() < 0.9:
-            # 90%的概率选择最接近目标的邻居
-            neighbors.sort(key=lambda pos: euclidean_distance(pos, goal))
-            current = neighbors[0]
-        else:
-            # 10%的概率随机选择一个邻居
-            current = random.choice(neighbors)
-        steps += 1
-    if current == goal:
-        return 1.0  # 成功到达
-    else:
-        return 0.0  # 未到达
-
-def euclidean_distance(a, b):
-    """
-    计算两个点之间的欧几里得距离。
-
-    :param a: 点a的坐标 (x, y)
-    :param b: 点b的坐标 (x, y)
-    :return: 两点之间的距离
-    """
-    return math.sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
-
-def mcts_search(map_grid, start, goal, iterations=10000):
-    """
-    使用MCTS搜索最优路径。
-
-    :param map_grid: 地图二维数组
-    :param start: 起点坐标 (x, y)
-    :param goal: 终点坐标 (x, y)
-    :param iterations: MCTS迭代次数
-    :return: MCTS根节点
-    """
-    root = MCTSNode(start, map_grid=map_grid)
-    
-    for _ in range(iterations):
-        node = root
-        # 选择阶段
-        while node.is_fully_expanded() and node.children:
-            node = node.best_child()
-        
-        # 扩展阶段
-        if not node.is_fully_expanded():
-            if node.untried_actions:
-                action = random.choice(node.untried_actions)
-                node = node.add_child(action, map_grid)
-            else:
-                continue  # 无未尝试的动作，跳过
-        
-        # 模拟阶段
-        reward = simulate_policy(node.position, goal, map_grid)
-        
-        # 回传阶段
-        while node is not None:
-            node.visits += 1
-            node.reward += reward
-            node = node.parent
-    
-    return root
-
-def extract_path(root, goal):
-    """
-    从MCTS树中提取路径。
-
-    :param root: MCTS根节点
-    :param goal: 终点坐标 (x, y)
-    :return: 路径列表，从起点到终点，如果未找到则返回None
-    """
-    path = []
-    node = root
-    while node.position != goal:
-        if not node.children:
-            break  # 无法继续
-        # 选择奖励最高的子节点
-        node = max(node.children, key=lambda n: (n.reward / n.visits) if n.visits > 0 else 0)
-        path.append(node.position)
-    return path if node.position == goal else None
-
-def visualize(map_grid, start, goal, path=None, search_nodes=None, filename='mcts_path_planning.jpg'):
-    """
-    可视化地图、搜索过程和路径，并保存为jpg文件。
-
-    :param map_grid: 二维地图
-    :param start: 起点坐标
-    :param goal: 终点坐标
-    :param path: 最终路径
-    :param search_nodes: 被搜索的节点
-    :param filename: 保存的文件名
-    """
-    plt.figure(figsize=(10,10))
-    plt.imshow(map_grid, cmap='Greys', origin='upper')
-    
-    # 标记起点和终点
-    plt.scatter(start[0], start[1], marker='o', color='green', label='起点')
-    plt.scatter(goal[0], goal[1], marker='x', color='red', label='终点')
-    
-    # 绘制搜索过的节点
-    if search_nodes:
-        xs, ys = zip(*search_nodes)
-        plt.scatter(xs, ys, marker='.', color='blue', alpha=0.05, label='搜索节点')
-    
-    # 绘制路径
-    if path:
-        px, py = zip(*path)
-        plt.plot(px, py, color='yellow', linewidth=2, label='路径')
-    
-    plt.legend(loc='upper right')
-    plt.title('蒙特卡洛树搜索路径规划')
-    plt.gca().invert_yaxis()  # 反转Y轴以匹配地图坐标
-    plt.grid(False)
-    plt.savefig(filename, format='jpg')
-    plt.show()
-    print(f"可视化结果已保存为 {filename}")
 
 def is_reachable(map_grid, start, goal):
     """
@@ -259,67 +80,314 @@ def is_reachable(map_grid, start, goal):
                 stack.append(neighbor)
     return False
 
-def collect_search_nodes(node, nodes_set):
-    """
-    收集MCTS树中的所有搜索节点。
+class Node:
+    """MCTS 树的节点"""
+    def __init__(self, state, parent=None):
+        self.state = state          # 当前状态 (row, column)
+        self.parent = parent        # 父节点
+        self.children = []          # 子节点
+        self.visits = 0             # 访问次数
+        self.reward = 0             # 累积奖励
+        self.untried_actions = []   # 未尝试的动作
 
-    :param node: 当前节点
-    :param nodes_set: 存储节点坐标的集合
+    def is_fully_expanded(self):
+        """判断节点是否完全扩展"""
+        return len(self.untried_actions) == 0
+
+    def best_child(self, c_param=math.sqrt(2)):
+        """选择最佳子节点（使用UCB1公式）"""
+        choices_weights = [
+            (child.reward / child.visits) + c_param * math.sqrt((2 * math.log(self.visits)) / child.visits)
+            for child in self.children
+        ]
+        return self.children[choices_weights.index(max(choices_weights))]
+
+    def expand(self, grid):
+        """扩展节点，生成一个子节点"""
+        action = self.untried_actions.pop()
+        next_state = move(self.state, action, grid)
+        child_node = Node(next_state, parent=self)
+        child_node.untried_actions = get_valid_actions(next_state, grid)
+        self.children.append(child_node)
+        return child_node
+
+    def __repr__(self):
+        return f"Node(state={self.state}, visits={self.visits}, reward={self.reward})"
+
+def simulate(state, goal, grid):
     """
-    nodes_set.add(node.position)
+    模拟函数：从当前状态开始，随机选择动作直到达到目标或达到最大步数
+    引入一定的启发式策略和随机性，避免陷入循环
+    """
+    current_state = state
+    steps = 0
+    max_steps = 50  # 避免无限循环
+    visited = set()
+    visited.add(current_state)
+
+    while not is_goal(current_state, goal) and steps < max_steps:
+        possible_actions = get_valid_actions(current_state, grid)
+        if not possible_actions:
+            break  # 无可行动作
+
+        # 80% 概率选择最优动作，20% 随机动作
+        if random.random() < 0.8:
+            # 启发式：选择能最小化与目标距离的动作
+            best_actions = []
+            min_distance = float('inf')
+            for action in possible_actions:
+                next_state = move(current_state, action, grid)
+                dist = manhattan_distance(next_state, goal)
+                if dist < min_distance:
+                    best_actions = [action]
+                    min_distance = dist
+                elif dist == min_distance:
+                    best_actions.append(action)
+            chosen_action = random.choice(best_actions)
+        else:
+            # 随机选择动作
+            chosen_action = random.choice(possible_actions)
+
+        next_state = move(current_state, chosen_action, grid)
+
+        if next_state in visited:
+            break  # 避免循环
+        current_state = next_state
+        visited.add(current_state)
+        steps += 1
+
+    return 1 if is_goal(current_state, goal) else 0
+
+def mcts(root, grid, goal, iterations=10000):
+    """执行蒙特卡洛树搜索"""
+    success_simulations = 0  # 成功到达目标的模拟次数
+
+    for _ in range(iterations):
+        node = root
+
+        # 选择阶段
+        while node.is_fully_expanded() and node.children:
+            node = node.best_child()
+
+        # 扩展阶段
+        if not node.is_fully_expanded():
+            node = node.expand(grid)
+
+        # 模拟阶段
+        reward = simulate(node.state, goal, grid)
+        if reward == 1:
+            success_simulations += 1
+
+        # 回溯与更新
+        while node is not None:
+            node.visits += 1
+            node.reward += reward
+            node = node.parent
+
+    print(f"模拟次数: {iterations}, 成功次数: {success_simulations}")
+    return root
+
+def extract_path(root, goal):
+    """
+    提取路径：从根节点开始，选择访问次数最多的子节点，直到达到目标
+    """
+    path = [root.state]
+    node = root
+    visited_states = set()
+    visited_states.add(node.state)
+
+    while True:
+        if not node.children:
+            break
+        # 选择访问次数最多的子节点
+        node = max(node.children, key=lambda c: c.visits)
+        if node.state in visited_states:
+            break  # 防止进入循环
+        path.append(node.state)
+        visited_states.add(node.state)
+        if is_goal(node.state, goal):
+            break
+
+    return path
+
+def visualize_grid(grid, path=None, search_tree=None, start=(0,0), goal=(0,0), filename="grid_path.jpg", obstacle_density=0.2):
+    """
+    可视化网格、路径和搜索树，并保存为JPG文件
+    :param grid: 二维网格地图
+    :param path: 规划出的路径
+    :param search_tree: MCTS搜索树，使用networkx绘制
+    :param start: 起点坐标
+    :param goal: 终点坐标
+    :param filename: 保存的JPG文件名
+    """
+    rows = len(grid)
+    cols = len(grid[0])
+    fig, ax = plt.subplots(figsize=(cols, rows))
+    ax.set_xlim(-0.5, cols - 0.5)
+    ax.set_ylim(-0.5, rows - 0.5)
+    ax.set_xticks(range(cols))
+    ax.set_yticks(range(rows))
+    ax.grid(True)
+
+    # 绘制障碍物
+    for i in range(rows):
+        for j in range(cols):
+            if grid[i][j] == 1:
+                rect = plt.Rectangle((j - 0.5, i - 0.5), 1, 1, facecolor='black')
+                ax.add_patch(rect)
+
+    # 绘制路径
+    if path:
+        path_x = [state[1] for state in path]
+        path_y = [state[0] for state in path]
+        ax.plot(path_x, path_y, color='blue', linewidth=2, marker='o', label='Path')
+
+    # 绘制起点和终点
+    ax.plot(start[1], start[0], marker='s', color='green', markersize=10, label='Start')
+    ax.plot(goal[1], goal[0], marker='*', color='red', markersize=15, label='Goal')
+
+    # 绘制搜索树（如果提供）
+    if search_tree:
+        G = nx.DiGraph()
+        for parent, children in search_tree.items():
+            for child in children:
+                G.add_edge(parent, child)
+        pos = {state: (state[1], state[0]) for state in G.nodes()}
+        nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.3, arrows=False)
+        # 可选：只绘制部分搜索树以避免过于复杂
+        # nx.draw_networkx_nodes(G, pos, ax=ax, node_size=10, node_color='gray', alpha=0.3)
+
+    ax.legend()
+    plt.title(f"Grid Path Planning (Size: {rows}x{cols}, Obstacle Density: {int(obstacle_density*100)}%)")
+    plt.savefig(filename, format='jpg')
+    plt.close()
+
+def validate_path(path, grid, start, goal):
+    """
+    验证路径中是否包含障碍物，并且路径是否从起点到终点
+    """
+    if not path:
+        return False
+    if path[0] != start or path[-1] != goal:
+        return False
+    for state in path:
+        if state != start and state != goal:
+            row, col = state
+            if grid[row][col] != 0:
+                return False
+    return True
+
+def build_search_tree(node, tree):
+    """
+    构建搜索树的数据结构，用于可视化
+    """
+    if node.state not in tree:
+        tree[node.state] = []
     for child in node.children:
-        collect_search_nodes(child, nodes_set)
+        tree[node.state].append(child.state)
+        build_search_tree(child, tree)
 
-def main():
-    # 地图参数
-    width = 10               # 地图宽度
-    height = 10              # 地图高度
-    obstacle_density = 0.1   # 障碍物密度（10%）
-
-    # 起点和终点
-    start = (0, 0)
-    goal = (width - 1, height - 1)
-
-    # 生成地图
-    map_grid = generate_map(width, height, obstacle_density, start, goal)
-    
-    # 确保起点和终点不是障碍物
-    map_grid[start[1]][start[0]] = 0
-    map_grid[goal[1]][goal[0]] = 0
-
-    # 检查是否有可行路径，如果没有则重新生成地图
+def run_experiment(rows=10, cols=10, obstacle_density=0.2, iterations=10000, max_attempts=20, save_visualization=True):
+    """
+    运行一次MCTS路径规划实验
+    :param rows: 网格行数
+    :param cols: 网格列数
+    :param obstacle_density: 障碍物密度（0到1之间）
+    :param iterations: MCTS迭代次数
+    :param max_attempts: 最大尝试次数生成可行路径的地图
+    :param save_visualization: 是否保存可视化结果
+    """
     attempts = 0
-    max_attempts = 20
-    while not is_reachable(map_grid, start, goal):
-        map_grid = generate_map(width, height, obstacle_density, start, goal)
-        map_grid[start[1]][start[0]] = 0
-        map_grid[goal[1]][goal[0]] = 0
-        attempts += 1
-        if attempts >= max_attempts:
-            print("无法生成可行路径的地图，请调整参数。")
-            return
-    print(f"地图生成成功，尝试次数：{attempts + 1}")
+    while attempts < max_attempts:
+        # 生成网格地图
+        grid = generate_grid(rows, cols, obstacle_density)
 
-    # MCTS搜索
-    iterations = 50000  # MCTS迭代次数，根据需要调整
+        # 确保起点和终点不被障碍物占据
+        start = (0, 0)                # 左下角
+        goal = (rows-1, cols-1)      # 右上角
+        grid[start[0]][start[1]] = 0
+        grid[goal[0]][goal[1]] = 0
+
+        # 检查起点和终点是否可达
+        if is_reachable(grid, start, goal):
+            print(f"地图生成成功，尝试次数：{attempts + 1}")
+            break
+        else:
+            attempts += 1
+            print(f"尝试次数：{attempts} - 未生成可行路径的地图，重新生成...")
+
+    if attempts >= max_attempts:
+        print("无法生成可行路径的地图，请调整参数。")
+        return
+
+    # 初始化MCTS根节点
+    root = Node(start)
+    root.untried_actions = get_valid_actions(start, grid)
+
+    # 记录搜索树
+    search_tree = {}
+
+    # 执行MCTS
     start_time = time.time()
-    root = mcts_search(map_grid, start, goal, iterations=iterations)
+    root = mcts(root, grid, goal, iterations)
     end_time = time.time()
-    print(f"MCTS搜索完成，迭代次数：{iterations}，耗时：{end_time - start_time:.2f}秒")
+
+    # 构建搜索树数据结构（仅限可视化）
+    build_search_tree(root, search_tree)
 
     # 提取路径
     path = extract_path(root, goal)
-    if path:
-        print(f"找到路径，长度：{len(path)}")
+
+    # 验证路径
+    is_valid = validate_path(path, grid, start, goal)
+
+    # 可视化并保存结果
+    if save_visualization:
+        filename = f"grid_path_{rows}x{cols}_density{int(obstacle_density*100)}.jpg"
+        visualize_grid(grid, path, search_tree, start, goal, filename, obstacle_density)
+
+    # 输出结果
+    print(f"地图规模: {rows}x{cols}, 障碍物密度: {obstacle_density}")
+    print(f"模拟次数: {iterations}, 成功次数: {root.reward}")
+    print(f"搜索时间: {end_time - start_time:.2f} 秒")
+    if is_valid:
+        print("找到的路径是有效的。")
+        print("路径长度:", len(path))
     else:
-        print("未找到路径。")
+        print("未能找到有效的路径。")
+        print("当前最佳路径:")
+        print(path)
 
-    # 收集被搜索的节点用于可视化
-    search_nodes = set()
-    collect_search_nodes(root, search_nodes)
+def main():
+    """
+    主函数：运行多个实验，测试MCTS在不同障碍物密度和地图规模下的表现
+    """
+    experiments = [
+        {'rows': 5, 'cols': 5, 'obstacle_density': 0.2},
+        {'rows': 5, 'cols': 5, 'obstacle_density': 0.3},
+        {'rows': 5, 'cols': 5, 'obstacle_density': 0.4},
+        {'rows': 8, 'cols': 8, 'obstacle_density': 0.2},
+        {'rows': 8, 'cols': 8, 'obstacle_density': 0.3},
+        {'rows': 8, 'cols': 8, 'obstacle_density': 0.4},
+        {'rows': 10, 'cols': 10, 'obstacle_density': 0.2},
+        {'rows': 10, 'cols': 10, 'obstacle_density': 0.3},
+        {'rows': 10, 'cols': 10, 'obstacle_density': 0.4},
+        {'rows': 15, 'cols': 15, 'obstacle_density': 0.3},
+        {'rows': 15, 'cols': 15, 'obstacle_density': 0.4},
+        {'rows': 15, 'cols': 15, 'obstacle_density': 0.5},
+    ]
 
-    # 可视化结果并保存为jpg文件
-    visualize(map_grid, start, goal, path, search_nodes, filename='mcts_path_planning.jpg')
+    for exp in experiments:
+        print("\n" + "="*50)
+        print(f"运行实验: {exp}")
+        run_experiment(
+            rows=exp['rows'],
+            cols=exp['cols'],
+            obstacle_density=exp['obstacle_density'],
+            iterations=500000,
+            max_attempts=20,
+            save_visualization=True
+        )
 
 if __name__ == "__main__":
     main()
